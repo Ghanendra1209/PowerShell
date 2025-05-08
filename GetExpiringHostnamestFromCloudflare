@@ -1,0 +1,79 @@
+#The script uses cloudflare api to fetch a list of custom hostnames whose certificates expire during the start date and end date
+#The script can be called using following command - 
+#.\GetExpiringHostnamestFromCloudflare.ps1 `
+#    -ZoneID "<your zone id>" `
+#    -AuthEmail "<your cloudflare account email id>" `
+#    -AuthKey "<your auth key>" `
+#    -StartDate "2025-05-01" `
+#    -EndDate "2025-06-30"
+
+param (
+    [Parameter(Mandatory = $true)]
+    [string]$ZoneID,
+
+    [Parameter(Mandatory = $true)]
+    [string]$AuthEmail,
+
+    [Parameter(Mandatory = $true)]
+    [string]$AuthKey,
+
+    [Parameter(Mandatory = $true)]
+    [datetime]$StartDate,
+
+    [Parameter(Mandatory = $true)]
+    [datetime]$EndDate
+)
+
+# Define headers for Cloudflare API
+$headers = @{
+    "X-Auth-Email" = $AuthEmail
+    "X-Auth-Key"   = $AuthKey
+    "Content-Type" = "application/json"
+}
+
+# API endpoint to get custom hostname SSL info
+$url = "https://api.cloudflare.com/client/v4/zones/$ZoneID/custom_hostnames?per_page=1000"
+
+# Fetch data
+try {
+    $response = Invoke-RestMethod -Uri $url -Headers $headers -Method Get
+} catch {
+    Write-Error "Failed to connect to Cloudflare API. $_"
+    exit
+}
+
+# Check success
+if (-not $response.success) {
+    Write-Error "API call failed: $($response.errors.message)"
+    exit
+}
+
+# Filter and format expiring certificates
+$expiringCerts = @()
+
+foreach ($entry in $response.result) {
+    $hostname = $entry.hostname
+    $certificates = $entry.ssl.certificates
+
+    foreach ($cert in $certificates) {
+        $expiresOn = Get-Date ($cert.expires_on -replace "Z$", "") -ErrorAction SilentlyContinue
+        if ($expiresOn -and $expiresOn -ge $StartDate -and $expiresOn -le $EndDate) {
+            $expiringCerts += [PSCustomObject]@{
+                Hostname             = $hostname
+                'Expires On'         = $expiresOn.ToString("yyyy-MM-dd")
+                Issuer               = $cert.issuer
+                'SHA256 Fingerprint' = $cert.fingerprint_sha256
+            }
+            break
+        }
+    }
+}
+
+# Output as table
+if ($expiringCerts.Count -gt 0) {
+    $expiringCerts | Sort-Object 'Expires On' | Format-Table -AutoSize
+} else {
+    Write-Host "No certificates found expiring between $($StartDate.ToShortDateString()) and $($EndDate.ToShortDateString())."
+}
+	
+	
